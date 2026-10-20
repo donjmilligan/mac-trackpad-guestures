@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var statusItem: NSStatusItem!
     private var enabledItem: NSMenuItem!
+    private var profileMenu = NSMenu()
     private var settingsWindow: NSWindow?
     private var enabledObserver: AnyCancellable?
 
@@ -39,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         enabledItem = NSMenuItem(title: "Gestures Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
         enabledItem.target = self
         menu.addItem(enabledItem)
+        menu.addItem(withTitle: "Profile", action: nil, keyEquivalent: "").submenu = profileMenu
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Restart Touch Listener", action: #selector(restartListener), keyEquivalent: "").target = self
@@ -52,6 +54,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         enabledItem.state = store.config.enabled ? .on : .off
+        profileMenu.removeAllItems()
+        for profile in store.config.profiles {
+            let item = NSMenuItem(title: profile.name, action: #selector(selectProfile(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = profile.id
+            item.state = profile.id == store.config.activeProfileID ? .on : .off
+            profileMenu.addItem(item)
+        }
+    }
+
+    @objc private func selectProfile(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? UUID { store.config.activeProfileID = id }
     }
 
     @objc private func toggleEnabled() {

@@ -39,10 +39,14 @@ struct PreferencesView: View {
             Section("Sensitivity") {
                 slider("Swipe distance", value: $store.config.engine.swipeDistanceMM, in: 6...40,
                        format: { "\(Int($0)) mm" })
+                slider("Rotate angle", value: $store.config.engine.rotateAngleDegrees, in: 5...45,
+                       format: { "\(Int($0))°" })
                 slider("Tap max duration", value: $store.config.engine.tapMaxDuration, in: 0.1...0.5,
                        format: { "\(Int($0 * 1000)) ms" })
                 slider("Tap max movement", value: $store.config.engine.tapMaxMovementMM, in: 1...10,
                        format: { String(format: "%.1f mm", $0) })
+                slider("Multi-tap window", value: $store.config.engine.multiTapInterval, in: 0.2...0.8,
+                       format: { "\(Int($0 * 1000)) ms" })
             }
 
             Section("Status") {

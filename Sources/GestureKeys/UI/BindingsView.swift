@@ -6,9 +6,37 @@ struct BindingsView: View {
     @EnvironmentObject var controller: GestureController
     @State private var selection: Set<GestureBinding.ID> = []
     @State private var editing: GestureBinding?
+    @State private var naming: ProfileNaming?
+    @State private var profileName = ""
+    @State private var confirmingDelete = false
+
+    private enum ProfileNaming { case new, duplicate, rename }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Picker("Profile", selection: $store.config.activeProfileID) {
+                    ForEach(store.config.profiles) { Text($0.name).tag($0.id) }
+                }
+                .fixedSize()
+                Menu {
+                    Button("New Profile…") { name(.new, "") }
+                    Button("Duplicate “\(activeName)”…") { name(.duplicate, activeName + " Copy") }
+                    Button("Rename “\(activeName)”…") { name(.rename, activeName) }
+                    Divider()
+                    Button("Delete “\(activeName)”…") { confirmingDelete = true }
+                        .disabled(store.config.profiles.count == 1)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                Spacer()
+                Text("Switch from the menu bar, or bind a gesture to System Action › Next Profile.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack {
                 Text("Last gesture:").foregroundStyle(.secondary)
                 Text(controller.lastTrigger?.displayName ?? "— perform one on the trackpad —")
@@ -52,6 +80,44 @@ struct BindingsView: View {
         .sheet(item: $editing) { binding in
             BindingEditor(original: binding) { store.upsert($0) }
         }
+        .onChange(of: store.config.activeProfileID) { selection = [] }
+        .alert(namingTitle, isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("Name", text: $profileName)
+            Button("Cancel", role: .cancel) {}
+            Button("OK", action: commitName)
+                .disabled(profileName.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .confirmationDialog("Delete the profile “\(activeName)” and its \(store.config.bindings.count) gesture(s)?",
+                            isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive) { store.deleteActiveProfile() }
+        }
+    }
+
+    private var activeName: String { store.config.activeProfile.name }
+
+    private var namingTitle: String {
+        switch naming {
+        case .new: "New Profile"
+        case .duplicate: "Duplicate Profile"
+        case .rename, nil: "Rename Profile"
+        }
+    }
+
+    private func name(_ kind: ProfileNaming, _ initial: String) {
+        profileName = initial
+        naming = kind
+    }
+
+    private func commitName() {
+        let name = profileName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        switch naming {
+        case .new: store.addProfile(named: name)
+        case .duplicate: store.addProfile(named: name, copying: store.config.activeProfile)
+        case .rename: store.config.profiles[store.config.activeProfileIndex].name = name
+        case nil: break
+        }
+        naming = nil
     }
 
     private func newBinding(for trigger: Trigger) -> GestureBinding {

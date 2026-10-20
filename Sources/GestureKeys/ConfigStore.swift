@@ -39,6 +39,23 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    // MARK: Profiles
+
+    func addProfile(named name: String, copying source: Profile? = nil) {
+        var profile = Profile(name: name)
+        // Fresh IDs so the copies are independent rows in the bindings table.
+        profile.bindings = source?.bindings.map { var b = $0; b.id = UUID(); return b } ?? []
+        config.profiles.append(profile)
+        config.activeProfileID = profile.id
+    }
+
+    func deleteActiveProfile() {
+        guard config.profiles.count > 1 else { return }
+        let index = config.activeProfileIndex
+        config.profiles.remove(at: index)
+        config.activeProfileID = config.profiles[max(0, index - 1)].id
+    }
+
     /// Adds a recorded stroke to the shape called `name`, creating the shape if needed.
     func addSample(_ stroke: [CGPoint], toShapeNamed name: String) {
         guard let normalized = ShapeRecognizer.normalize(stroke) else { return }
@@ -55,8 +72,10 @@ final class ConfigStore: ObservableObject {
         guard let index = shapes.firstIndex(where: { $0.id == id }) else { return }
         let oldName = shapes[index].name
         shapes[index].name = newName
-        for i in config.bindings.indices where config.bindings[i].trigger == .shape(name: oldName) {
-            config.bindings[i].trigger = .shape(name: newName)
+        for p in config.profiles.indices {
+            for i in config.profiles[p].bindings.indices where config.profiles[p].bindings[i].trigger == .shape(name: oldName) {
+                config.profiles[p].bindings[i].trigger = .shape(name: newName)
+            }
         }
     }
 

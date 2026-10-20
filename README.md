@@ -1,13 +1,22 @@
 # GestureKeys
 
-A small, personal BetterTouchTool-style menu bar app: bind trackpad gestures to keyboard shortcuts
-(or shell commands).
+A small, personal BetterTouchTool-style menu bar app: bind trackpad gestures to keyboard shortcuts,
+system actions or shell commands.
 
 - **Multi-finger swipes**: 2–5 fingers × up/down/left/right
-- **Multi-finger taps**: 2–5 fingers
+- **Multi-finger rotation**: 2–5 fingers turned like a knob, left (counterclockwise) or right (clockwise). Since the
+  hand stays in place, it doesn't set off macOS's own swipes the way 5-finger swipes can. Lift to fire the rotation
+  itself, or keep the fingers down and drag ↑ ↓ ← → for four more commands per direction (8 per finger count).
+- **Multi-finger taps**: 2–5 fingers, single, double, triple or 4× taps. A single tap only waits for a possible
+  second tap when a double/triple tap with the same finger count is bound.
 - **Drawn shapes**: hold a modifier (⌥ by default) and draw with one finger. It comes with circles, check, V, ^, Z, N, L,
   triangle and square, and you can record your own.
+- **System actions** for inputs a keyboard doesn't have: Back / Forward (mouse side buttons), middle click,
+  play/pause, next/previous track, volume, brightness, sleep display, Mission Control, App Exposé, Show Desktop.
+  The last three replace the macOS gestures you turn off to use 4-finger swipes.
 - **Per-app bindings**: a binding can be limited to one app; app-specific bindings win over "All apps".
+- **Profiles**: separate sets of bindings (e.g. Work, Music, Presenting). Switch from the menu bar, the Gestures tab,
+  or a gesture bound to *System Action › Next Profile*.
 
 ## Build & run
 
@@ -62,7 +71,7 @@ ones that use the finger counts you bind:
 | You bind | Turn off |
 | --- | --- |
 | 4-finger swipes | Swipe between full-screen apps, Mission Control, App Exposé (if set to 4 fingers) |
-| 5-finger swipes | Usually fine; if Mission Control or Spaces still trigger, turn those off too |
+| 5-finger swipes | Usually fine; if Mission Control or Spaces still trigger, turn those off too (or use 5-finger rotation instead) |
 | 3-finger swipes | Three-finger drag (Accessibility › Pointer Control) and 3-finger swipes |
 | 4/5-finger pinch | Launchpad, Show Desktop |
 
@@ -75,13 +84,15 @@ The app and menu bar icons are generated at build time from `Resources/AppIcon.p
 
 `~/Library/Application Support/GestureKeys/`
 
-- `config.json`: settings and bindings
+- `config.json`: settings, profiles and their bindings
 - `shapes.json`: shape templates (64 normalized points per sample)
 
 Both are pretty-printed JSON. Edit them only while the app is quit. If one fails to parse, it's moved aside as
 `*.broken-<timestamp>` and the app starts with defaults.
 
-Example bindings (5-finger swipe down → ⌘W; draw a check in Safari → run a command):
+Bindings live in `profiles[].bindings`; `activeProfileID` picks the profile in use. A config from before profiles
+is moved into a profile called "Default" on first launch. Example bindings (5-finger swipe down → ⌘W; draw a check
+in Safari → run a command):
 
 ```json
 {
@@ -100,16 +111,18 @@ Example bindings (5-finger swipe down → ⌘W; draw a check in Safari → run a
 ```
 
 `keyCode` is a macOS virtual key code (W is 13). `modifiers` is a bitmask: ⌃ 1, ⌥ 2, ⇧ 4, ⌘ 8, fn 16.
-Leave out `appBundleID` to apply a binding in every app. Other triggers look like `{ "tap": { "fingers": 3 } }`.
+System actions look like `{ "system": { "action": "back" } }`; the names are the cases of `SystemAction` in
+`Sources/GestureCore/Model.swift`. Leave out `appBundleID` to apply a binding in every app. Other triggers look like `{ "tap": { "fingers": 3, "taps": 2 } }` (a 3-finger double tap) and
+`{ "rotate": { "direction": "right", "fingers": 5, "then": "up" } }` (leave out `then` for a plain rotation).
 
 ## How it works
 
 | Piece | File |
 | --- | --- |
 | Raw touch data from Apple's private `MultitouchSupport.framework` (loaded with `dlopen`, as BTT, Jitouch etc. do) | `Sources/CMultitouch` |
-| Frames → swipe / tap / drawing events (per trackpad, measured in millimetres) | `Sources/GestureCore/GestureEngine.swift` |
+| Frames → swipe / rotate / tap / drawing events (per trackpad, measured in millimetres) | `Sources/GestureCore/GestureEngine.swift` |
 | Shape recognition: a rotation-sensitive variant of the $1 Unistroke Recognizer | `Sources/GestureCore/ShapeRecognizer.swift` |
-| Synthesizing key presses (`CGEvent`) and shell commands | `Sources/GestureKeys/ActionRunner.swift` |
+| Synthesizing key presses, mouse buttons and media keys (`CGEvent`), Mission Control etc. (private Dock call), shell commands | `Sources/GestureKeys/ActionRunner.swift` |
 | Glue: per-app lookup, drawing overlay, HUD, cursor freeze while drawing | `Sources/GestureKeys/GestureController.swift` |
 
 Since `MultitouchSupport` is private API, a future macOS update could break it. The touch struct layout is checked at

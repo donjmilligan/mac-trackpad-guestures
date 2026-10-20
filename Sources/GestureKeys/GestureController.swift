@@ -21,6 +21,9 @@ final class GestureController: ObservableObject {
     private let overlay = DrawingOverlay()
     private let hud = HUD()
     private var cursorAnchor: CGPoint?
+    /// Taps counted so far that may still become a double/triple tap.
+    private var pendingTap: (fingers: Int, taps: Int)?
+    private var pendingTapTimeout: DispatchWorkItem?
     private var cancellables: Set<AnyCancellable> = []
 
     init(store: ConfigStore) {
@@ -101,10 +104,18 @@ final class GestureController: ObservableObject {
     private func handle(_ event: GestureEngine.Event, from engine: GestureEngine) {
         switch event {
         case let .swipe(fingers, direction):
+            flushPendingTap()
             if fingers >= 2 { fire(.swipe(fingers: fingers, direction: direction)) }
+        case let .rotateRecognized(fingers, direction):
+            flushPendingTap()
+            // Two-step gesture: confirm the turn so you know a drag will now pick a command.
+            if fingers >= 3, store.config.showHUD { hud.show("\(direction.arrow)  drag ↑ ↓ ← → or lift") }
+        case let .rotate(fingers, direction, then):
+            if fingers >= 2 { fire(.rotate(fingers: fingers, direction: direction, then: then)) }
         case let .tap(fingers):
-            if fingers >= 2 { fire(.tap(fingers: fingers)) }
+            if fingers >= 2 { countTap(fingers: fingers) }
         case .drawBegan:
+            flushPendingTap()
             overlay.begin(aspect: engine.surfaceMM.width / engine.surfaceMM.height)
             freezeCursor()
         case let .drawMoved(point):
@@ -118,6 +129,35 @@ final class GestureController: ObservableObject {
             releaseCursor()
             finishStroke(stroke)
         }
+    }
+
+    // MARK: Multi-taps
+
+    /// Fires as soon as no bound tap needs more taps; otherwise waits `multiTapInterval` for the next one.
+    private func countTap(fingers: Int) {
+        pendingTapTimeout?.cancel()
+        var taps = 1
+        if let pending = pendingTap {
+            if pending.fingers == fingers { taps = pending.taps + 1 } else { flushPendingTap() }
+        }
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if taps >= store.config.maxTaps(fingers: fingers, frontmostApp: frontmost) {
+            pendingTap = nil
+            fire(.tap(fingers: fingers, taps: taps))
+        } else {
+            pendingTap = (fingers, taps)
+            let timeout = DispatchWorkItem { [weak self] in self?.flushPendingTap() }
+            pendingTapTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + store.config.engine.multiTapInterval, execute: timeout)
+        }
+    }
+
+    private func flushPendingTap() {
+        pendingTapTimeout?.cancel()
+        pendingTapTimeout = nil
+        guard let pending = pendingTap else { return }
+        pendingTap = nil
+        fire(.tap(fingers: pending.fingers, taps: pending.taps))
     }
 
     private func finishStroke(_ stroke: [CGPoint]) {
@@ -148,14 +188,20 @@ final class GestureController: ObservableObject {
     private func fire(_ trigger: Trigger) {
         // 2-finger swipes/taps happen constantly (scrolling, right-click) and would drown out the gesture you just tried.
         switch trigger {
-        case .swipe(fingers: 2, _), .tap(fingers: 2): break
+        case .swipe(fingers: 2, _), .rotate(fingers: 2, _, _), .tap(fingers: 2, _): break
         default: lastTrigger = trigger
         }
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         guard let binding = store.config.binding(for: trigger, frontmostApp: frontmost) else { return }
-        ActionRunner.run(binding.action)
+        var result = binding.action.displayName
+        if binding.action == .system(action: .nextProfile) {
+            store.config.activateNextProfile()
+            result = "Profile: \(store.config.activeProfile.name)"
+        } else {
+            ActionRunner.run(binding.action)
+        }
         if store.config.showHUD {
-            hud.show("\(trigger.displayName)  →  \(binding.action.displayName)")
+            hud.show("\(trigger.displayName)  →  \(result)")
         }
     }
 

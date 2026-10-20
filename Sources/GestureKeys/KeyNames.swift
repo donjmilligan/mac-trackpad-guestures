@@ -34,6 +34,7 @@ extension GestureAction {
         switch self {
         case let .keyboardShortcut(combo): combo.displayString
         case let .shellCommand(command): "$ " + command
+        case let .system(action): action.title
         }
     }
 }

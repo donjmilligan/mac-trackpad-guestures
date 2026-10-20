@@ -41,6 +41,57 @@ check(runGesture(fingers: 3, delta: CGPoint(x: 0.005, y: 0), steps: 4, duration:
 check(runGesture(fingers: 3, delta: .zero, steps: 4, duration: 0.6).isEmpty, "long press is not a tap")
 check(runGesture(fingers: 5, delta: CGPoint(x: 0, y: 0.05)).isEmpty, "small movement is neither swipe nor tap")
 
+/// Five fingers on a 25 mm circle turning by `degrees` (counterclockwise positive) while the hand drifts by `drift` mm,
+/// then, without lifting, dragging by `drag` mm.
+func runRotation(degrees: Double, drift: CGPoint = .zero, drag: CGPoint = .zero) -> [GestureEngine.Event] {
+    let engine = GestureEngine(settings: EngineSettings(), surfaceMM: surface)
+    var events: [GestureEngine.Event] = []
+    func frame(angle: Double, center: CGPoint, at time: Double) {
+        let touches = (0..<5).map { i -> TouchPoint in
+            let a = (Double(i) * 50 + 20 + angle) * .pi / 180
+            return TouchPoint(id: Int32(i), x: (center.x + 25 * cos(a)) / surface.width,
+                              y: (center.y + 25 * sin(a)) / surface.height)
+        }
+        events += engine.process(touches: touches, timestamp: time, modifiers: [])
+    }
+    for step in 0...20 {
+        let t = Double(step) / 20
+        frame(angle: degrees * t, center: CGPoint(x: 80 + drift.x * t, y: 50 + drift.y * t), at: 0.5 * t)
+    }
+    for step in 1...15 {
+        let t = Double(step) / 15
+        frame(angle: degrees, center: CGPoint(x: 80 + drift.x + drag.x * t, y: 50 + drift.y + drag.y * t), at: 0.5 + 0.3 * t)
+    }
+    events += engine.process(touches: [], timestamp: 0.9, modifiers: [])
+    return events
+}
+
+check(runRotation(degrees: -40) == [.rotateRecognized(fingers: 5, direction: .right), .rotate(fingers: 5, direction: .right, then: nil)],
+      "5-finger clockwise turn, lift → rotate right")
+check(runRotation(degrees: 40) == [.rotateRecognized(fingers: 5, direction: .left), .rotate(fingers: 5, direction: .left, then: nil)],
+      "5-finger counterclockwise turn, lift → rotate left")
+check(runRotation(degrees: -40, drift: CGPoint(x: 18, y: 6)).last == .rotate(fingers: 5, direction: .right, then: nil),
+      "a turn that drifts sideways is still a rotation, not a swipe")
+check(runRotation(degrees: 7).isEmpty, "a small turn does nothing")
+
+let drags: [(SwipeDirection, CGPoint)] = [(.up, CGPoint(x: 0, y: 25)), (.down, CGPoint(x: 0, y: -25)),
+                                          (.left, CGPoint(x: -25, y: 0)), (.right, CGPoint(x: 25, y: 0))]
+for (rotation, degrees) in [(RotateDirection.right, -40.0), (.left, 40.0)] {
+    for (direction, drag) in drags {
+        let events = runRotation(degrees: degrees, drag: drag)
+        check(events == [.rotateRecognized(fingers: 5, direction: rotation), .rotate(fingers: 5, direction: rotation, then: direction)],
+              "rotate \(rotation.rawValue) then drag \(direction.rawValue)")
+    }
+}
+check(runRotation(degrees: -90, drift: CGPoint(x: 10, y: -10)).last == .rotate(fingers: 5, direction: .right, then: nil),
+      "turning well past the threshold isn't read as a drag")
+check(runRotation(degrees: -60, drag: CGPoint(x: -25, y: 2)).last == .rotate(fingers: 5, direction: .right, then: .left),
+      "overshooting the turn doesn't change the drag")
+check(runRotation(degrees: -40, drag: CGPoint(x: 20, y: 20)).last == .rotate(fingers: 5, direction: .right, then: nil),
+      "a diagonal drag after a turn falls back to plain rotate")
+check(runRotation(degrees: -40, drag: CGPoint(x: 0, y: 8)).last == .rotate(fingers: 5, direction: .right, then: nil),
+      "a short drag after a turn falls back to plain rotate")
+
 do {
     // Fingers landing one at a time shouldn't produce a swipe with the wrong count.
     let engine = GestureEngine(settings: EngineSettings(), surfaceMM: surface)
@@ -122,8 +173,50 @@ do {
     let data = try! JSONEncoder().encode(config)
     let decoded = try! JSONDecoder().decode(AppConfig.self, from: data)
     check(decoded == config, "config round-trips through JSON")
+    let back = try! JSONDecoder().decode(GestureAction.self, from: Data(#"{"system": {"action": "back"}}"#.utf8))
+    check(back == .system(action: .back), "system action decodes from JSON")
+    check(Set(SystemAction.groups.flatMap(\.1)) == Set(SystemAction.allCases), "every system action is in a picker group")
     let partial = try! JSONDecoder().decode(AppConfig.self, from: Data(#"{"enabled": false}"#.utf8))
     check(!partial.enabled && partial.engine == EngineSettings(), "missing keys fall back to defaults")
+}
+
+print("Taps & profiles")
+do {
+    let legacyTap = try! JSONDecoder().decode(Trigger.self, from: Data(#"{"tap": {"fingers": 3}}"#.utf8))
+    check(legacyTap == .tap(fingers: 3, taps: 1), "tap without a count decodes as a single tap")
+    let double = Trigger.tap(fingers: 4, taps: 2)
+    check(try! JSONDecoder().decode(Trigger.self, from: JSONEncoder().encode(double)) == double, "double tap round-trips")
+    check(double.displayName == "4-finger double tap", "double tap display name")
+    let combo = Trigger.rotate(fingers: 5, direction: .right, then: .up)
+    check(try! JSONDecoder().decode(Trigger.self, from: JSONEncoder().encode(combo)) == combo, "rotate-then-swipe round-trips")
+    check(combo.displayName == "5-finger rotate right ↻ then swipe up ↑", "rotate-then-swipe display name")
+    let plain = try! JSONDecoder().decode(Trigger.self, from: Data(#"{"rotate": {"fingers": 5, "direction": "left"}}"#.utf8))
+    check(plain == .rotate(fingers: 5, direction: .left, then: nil), "rotate without a drag decodes")
+
+    let legacy = #"{"bindings": [{"id": "BEF1AB03-B65E-43D0-A577-4EE099956A17", "enabled": true,"#
+        + #""trigger": {"tap": {"fingers": 3}}, "action": {"shellCommand": {"command": "x"}}}]}"#
+    let migrated = try! JSONDecoder().decode(AppConfig.self, from: Data(legacy.utf8))
+    check(migrated.profiles.count == 1 && migrated.activeProfile.name == "Default" && migrated.bindings.count == 1,
+          "pre-profile config becomes a Default profile")
+
+    var config = AppConfig()
+    config.bindings = [
+        GestureBinding(trigger: .tap(fingers: 3), action: .shellCommand(command: "one")),
+        GestureBinding(trigger: .tap(fingers: 3, taps: 3), action: .shellCommand(command: "three"), appBundleID: "com.apple.Safari"),
+    ]
+    check(config.maxTaps(fingers: 3, frontmostApp: "com.apple.Safari") == 3, "max taps counts app-specific bindings")
+    check(config.maxTaps(fingers: 3, frontmostApp: "com.apple.finder") == 1, "max taps ignores other apps' bindings")
+    check(config.maxTaps(fingers: 4, frontmostApp: nil) == 1, "max taps defaults to 1")
+
+    let first = config.activeProfileID
+    config.profiles.append(Profile(name: "Work"))
+    config.activateNextProfile()
+    check(config.activeProfile.name == "Work" && config.bindings.isEmpty, "next profile switches bindings")
+    check(config.binding(for: .tap(fingers: 3), frontmostApp: nil) == nil, "inactive profile's bindings don't fire")
+    config.activateNextProfile()
+    check(config.activeProfileID == first, "next profile wraps around")
+    let decoded = try! JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+    check(decoded == config, "profiles round-trip through JSON")
 }
 
 print(failures == 0 ? "\nAll checks passed." : "\n\(failures) check(s) failed.")
